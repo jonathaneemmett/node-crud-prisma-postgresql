@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { hash, compare } from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import { generateToken } from '../utils/TokenGenerators.js';
 
 const prisma = new PrismaClient();
 
@@ -32,9 +33,7 @@ export async function register(req, res, next) {
 	});
 
 	// Token
-	const token = jwt.sign({ id: newUser.id }, process.env.JWT_SECRET, {
-		expiresIn: 3600,
-	});
+	const token = await generateToken(newUser);
 
 	res.status(201).json({
 		user: {
@@ -73,9 +72,7 @@ export async function login(req, res, next) {
 			.json({ msg: 'Username or password is incorrect.' });
 
 	// Token
-	const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-		expiresIn: 3600,
-	});
+	const token = await generateToken(user);
 
 	res.status(200).json({
 		user: {
