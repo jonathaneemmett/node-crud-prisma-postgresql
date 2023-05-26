@@ -1,7 +1,10 @@
-import { Prisma, PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { hash, compare } from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import { generateToken } from '../utils/TokenGenerators.js';
+import {
+	getTokens,
+	verifyContext,
+	verifyRefreshToken,
+} from '../utils/TokenGenerators.js';
 
 const prisma = new PrismaClient();
 
@@ -32,9 +35,39 @@ export async function register(req, res, next) {
 		},
 	});
 
-	// Token
-	const token = await generateToken(newUser);
+	// Get the tokens
+	const { token, refreshToken, context, contextToken } = await getTokens(
+		newUser,
+	);
 
+	// Save the context to the user in the database
+	await prisma.user.update({
+		where: {
+			id: newUser.id,
+		},
+		data: {
+			context: context,
+		},
+	});
+
+	// Bake the cookies
+	res.cookie('refreshToken', refreshToken, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	res.cookie('context', context, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	// Return the user and the token to the client
 	res.status(201).json({
 		user: {
 			id: newUser.id,
@@ -71,9 +104,39 @@ export async function login(req, res, next) {
 			.status(400)
 			.json({ msg: 'Username or password is incorrect.' });
 
-	// Token
-	const token = await generateToken(user);
+	// Get the tokens
+	const { token, refreshToken, context, contextToken } = await getTokens(
+		user,
+	);
 
+	// Save the context to the user in the database
+	await prisma.user.update({
+		where: {
+			id: newUser.id,
+		},
+		data: {
+			context: context,
+		},
+	});
+
+	// Bake the cookies
+	res.cookie('refreshToken', refreshToken, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	res.cookie('context', contextToken, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	// Return the user and the token to the client
 	res.status(200).json({
 		user: {
 			id: user.id,
@@ -85,4 +148,93 @@ export async function login(req, res, next) {
 	});
 }
 
-export default { register };
+export async function logout(req, res, next) {
+	// Bake the cookies
+	res.cookie('refreshToken', '', {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	res.cookie('context', '', {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+}
+
+export async function refreshToken(req, res, next) {
+	const { context, refreshToken } = req.cookies;
+
+	if (!refreshToken || !context)
+		return res.status(401).json({ msg: 'Unauthorized' });
+
+	// Decode the the refresh token
+	const decodedRefreshToken = await verifyRefreshToken(refreshToken);
+	if (!decodedRefreshToken)
+		return res.status(401).json({ msg: 'Unauthorized' });
+
+	// Get the user from the refresh token
+	const user = await prisma.user.findUnique({
+		where: {
+			id: decodedRefreshToken.id,
+		},
+	});
+	if (!user) return res.status(401).json({ msg: 'Unauthorized' });
+
+	// Check if the context matches
+	const isContext = await verifyContext(context, user.context);
+	if (!isContext) return res.status(401).json({ msg: 'Unauthorized' });
+
+	// Get the tokens
+	const {
+		token,
+		refreshToken: newRefreshToken,
+		context: newContext,
+		contextToken: newContextToken,
+	} = await getTokens(user);
+
+	// Save the context to the user in the database
+	await prisma.user.update({
+		where: {
+			id: user.id,
+		},
+		data: {
+			context: newContext,
+		},
+	});
+
+	// Bake the cookies
+	res.cookie('refreshToken', refreshToken, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	res.cookie('context', contextToken, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'lax',
+		secure: process.env.NODE_ENV === 'production',
+		maxAge: 60 * 60 * 24 * 1, // 1 day
+	});
+
+	// Return the user and the token to the client
+	res.status(200).json({
+		user: {
+			id: user.id,
+			name: user.name,
+			email: user.email,
+			role: user.role,
+		},
+		token: token,
+	});
+}
+
+export default { register, login, logout };
